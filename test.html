@@ -1,0 +1,137 @@
+<!DOCTYPE HTML>
+<html>
+  <head>
+    <title>A Simple HTML Page</title>
+
+    <script src="//code.jquery.com/jquery-3.0.0.min.js"></script>
+    <script src="//cdnjs.cloudflare.com/ajax/libs/prettify/188.0.0/prettify.js">/* r224/r298 don't work! */</script>
+    <script src="//cdnjs.cloudflare.com/ajax/libs/jquery-cookie/1.4.1/jquery.cookie.min.js"></script>
+
+
+    <script src="//cdn.rawgit.com/chrisveness/geodesy/3113f49/vector3d.js">/* note must be included before latlon-ellipsoidal.js */</script>
+    <script src="//cdn.rawgit.com/chrisveness/geodesy/3113f49/latlon-ellipsoidal.js"></script>
+    <script src="//cdn.rawgit.com/chrisveness/geodesy/3113f49/osgridref.js"></script>
+    <script src="//cdn.rawgit.com/chrisveness/geodesy/3113f49/dms.js"></script>
+  </head>
+  <body>
+    <h1>My HTML Page</h1>
+		<script>
+		
+		var map;		// The map
+		var selectedPin;	// The currently selected pin (not used to pass data to the backend)
+
+		function LatLonToEastNorth(LatLonString){
+			try {
+				var degFmt = 'deg-format-d';
+            			var fixDig = degFmt=='dms' ? 2 : 6; // decimal digits
+                		var lat = Dms.parseDMS(LatLonString[0]);
+                    		var lon = Dms.parseDMS(LatLonString[1]);
+	                    	var wgs84 = LatLon(lat, lon, LatLon.datum.WGS84);
+	                    	var osgb = wgs84.convertDatum(LatLon.datum.OSGB36);
+	                    	var gridref = OsGridRef.latLonToOsGrid(osgb);
+	                    	return Math.round(gridref.easting)+','+Math.round(gridref.northing);
+	                } catch (e) {
+				console.log(e.message);
+				return false;
+	                }
+		}
+		function EastNorthToLatLon(EastNorthString){
+         	       try {
+				var degFmt = 'deg-format-d';
+            			var fixDig = degFmt=='dms' ? 2 : 6; // decimal digits
+                	    	var gridref = OsGridRef.parse(EastNorthString);
+                	    	var pWGS = OsGridRef.osGridToLatLon(gridref);
+                	    	var pOSGB = pWGS.convertDatum(LatLon.datum.OSGB36);
+				var LatInDecDeg = Dms.toLat(pWGS.lat,degFmt, fixDig);
+				if (LatInDecDeg.indexOf("S") != -1 ){
+					// This should never happen with the OS east/noth but...
+					var LatInDecDeg1 = "-" + LatInDecDeg;
+					var LatInDecDegWeb = LatInDecDeg1.substring(0, LatInDecDeg1.length - 2);
+				} else {
+					var LatInDecDegWeb = LatInDecDeg.substring(0, LatInDecDeg.length - 2);
+				}
+				var LonInDecDeg = Dms.toLon(pWGS.lon,degFmt, fixDig);
+				if (LonInDecDeg.indexOf("W") != -1 ) {
+					var LonInDecDeg1 = "-" + LonInDecDeg;
+					var LonInDecDegWeb = LonInDecDeg1.substring(0, LonInDecDeg1.length - 2);
+				} else {
+					var LonInDecDegWeb = LonInDecDeg.substring(0, LonInDecDeg.length - 2);
+				}
+				var retVar = [LatInDecDegWeb,LonInDecDegWeb];
+				return retVar;
+	                } catch (e) {
+				console.log(e.message);
+				return false;
+	                }
+		}
+		function loadMapScenario(){
+                	map = new Microsoft.Maps.Map(document.getElementById('myMap'), {});
+			Microsoft.Maps.Events.addHandler(map, 'viewchangeend', viewChanged);	// Anything changes viewChanged gets called
+			navigator.geolocation.getCurrentPosition(function (position) {
+				var loc = new Microsoft.Maps.Location(
+					position.coords.latitude,
+					position.coords.longitude);
+ 			        //Center the map on the user's location and zoom in close enogth to get the points.
+			map.setView({ center: loc, zoom: 15 });
+			});
+		}
+		function togglePinState(pinData){
+		        // Just in case
+		        if(pinData.target == null){
+		        	return;
+			}
+		        // There is no selected Pin so we just assign the first pin to be the selectedPin
+		        if(selectedPin == null){
+		        	selectedPin = pinData.target;
+		        	loadLightDataIntoDiv(selectedPin.catId);
+		        	return;
+		        } else if(pinData.target != selectedPin){
+				// Checks if the pin that triggered the event is not equal to the selected pin if so, we change states of both pins.
+				selectedPin.setOptions({enableClickedStyle: false});
+			        selectedPin.setOptions({enableClickedStyle: true});
+				selectedPin = pinData.target;
+				loadLightDataIntoDiv(selectedPin.catId);
+        		} else {
+				selectedPin = null;
+            			loadLightDataIntoDiv('Cleared');
+			}       
+		}
+		function loadLightDataIntoDiv(catId){
+			$.ajax({
+				url: "callback.php?tl="+catId,
+			       	context: document.body,
+				success: function(responseText) {
+					$('#selectedID').html(responseText);
+				}
+			});
+		}
+
+		function viewChanged(e){
+			lastZoomLevel = map.getZoom();
+			if (lastZoomLevel > 15) {				// If we're zoomed in a fair way load the lights
+				box = map.getBounds().toString().split(',');
+				TopLeft = [box[0],box[1]];			
+				BottomRight = [box[2],box[3]];
+				TopLeftEastNorth = LatLonToEastNorth(TopLeft);
+				BottomRightEastNorth = LatLonToEastNorth(BottomRight);	// set the prams to pass to the function (in east/north)
+ 				$.ajax({
+			            url: "callback.js?tl="+TopLeftEastNorth+"&br="+BottomRightEastNorth,
+			            context: document.body,
+			            success: function(responseText) {
+			                eval(responseText);				// execute the returned JS
+			            }
+			        });
+
+			} else {
+				map.entities.clear();					// If we're zoomed out clear the pins and any selected pin
+				loadLightDataIntoDiv('Cleared');
+			}
+		}
+		</script>
+        <div id='myMap' style='width: 50vw; height: 50vh;'></div>
+	<div id='selectedID'>test area</div>
+        <script type='text/javascript' src='https://www.bing.com/api/maps/mapcontrol?key={BING_KEY}&callback=loadMapScenario' async defer></script>
+   
+	
+  </body>
+</html>
